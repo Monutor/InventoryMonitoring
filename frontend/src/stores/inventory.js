@@ -126,10 +126,19 @@ export const useInventoryStore = defineStore('inventory', () => {
   }
 
   function connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws`
+    // Определяем WS URL на основе API_BASE (для GitHub Pages / других хостов)
+    let wsHost
+    if (API_BASE) {
+      const url = new URL(API_BASE)
+      const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsHost = `${protocol}//${url.host}/ws`
+    } else {
+      // Fallback для локальной разработки
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsHost = `${protocol}//${window.location.host}/ws`
+    }
     
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsHost)
 
     ws.onopen = () => {
       connected.value = true
