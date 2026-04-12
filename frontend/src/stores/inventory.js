@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+// Адаптивный размер страницы: мобилка — 15, десктоп — 30
+function getPageSize() {
+  return window.innerWidth < 768 ? 15 : 30
+}
 
 function getInitialTheme() {
   const saved = localStorage.getItem('theme')
@@ -44,58 +49,57 @@ export const useInventoryStore = defineStore('inventory', () => {
   const stores = ref([])
   const categories = ref([])
   const loading = ref(false)
+  const loadingMore = ref(false)
   const connected = ref(false)
   const lastUpdate = ref(null)
   const notifications = ref([])
   const fileName = ref('')
+
+  // Pagination state
+  const currentPage = ref(0)
+  const hasMore = ref(true)
+  const totalGroups = ref(0)
 
   // Filters
   const selectedCategory = ref('')
   const selectedStatus = ref('')
   const searchQuery = ref('')
 
-  // Computed
-  const filteredGroups = computed(() => {
-    let result = groups.value
-
-    if (selectedCategory.value) {
-      result = result.filter(g => g.Категория === selectedCategory.value)
-    }
-    if (selectedStatus.value) {
-      if (selectedStatus.value === 'counted') {
-        result = result.filter(g => g.Доля === 100)
-      } else if (selectedStatus.value === 'partial') {
-        result = result.filter(g => g.Доля > 0 && g.Доля < 100)
-      } else if (selectedStatus.value === 'not_counted') {
-        result = result.filter(g => g.Доля === 0)
-      } else if (selectedStatus.value === 'manual') {
-        result = result.filter(g => g.is_manual)
-      }
-    }
-    if (searchQuery.value) {
-      const q = searchQuery.value.toLowerCase()
-      result = result.filter(g => 
-        g.Группа.toLowerCase().includes(q) || 
-        g.Группа_ID?.toLowerCase().includes(q) ||
-        g.Подкатегория?.toLowerCase().includes(q)
-      )
-    }
-
-    return result
+  // Filters changed — reset pagination
+  watch([selectedCategory, selectedStatus, searchQuery], () => {
+    resetPagination()
   })
 
+  function resetPagination() {
+    groups.value = []
+    currentPage.value = 0
+    hasMore.value = true
+    totalGroups.value = 0
+  }
+
+  // Computed — groups уже отфильтрованы сервером
+  const filteredGroups = computed(() => groups.value)
+
   const hasDiscrepancies = computed(() => {
-    return filteredGroups.value.filter(g => 
+    return groups.value.filter(g =>
       g.Излишки > 0 || g.Недостачи > 0 || g.Брак > 0
     )
   })
 
   // Actions
-  async function fetchAll() {
+  async function fetchInitial() {
     loading.value = true
+    resetPagination()
     try {
+      const params = new URLSearchParams()
+      params.set('limit', String(getPageSize()))
+      params.set('offset', '0')
+      if (selectedCategory.value) params.set('category', selectedCategory.value)
+      if (selectedStatus.value) params.set('status', selectedStatus.value)
+      if (searchQuery.value) params.set('search', searchQuery.value)
+
       const [groupsRes, statsRes, storesRes, categoriesRes] = await Promise.all([
-        fetch(`${API_BASE}/api/groups`),
+        fetch(`${API_BASE}/api/groups?${params}`),
         fetch(`${API_BASE}/api/stats`),
         fetch(`${API_BASE}/api/stores`),
         fetch(`${API_BASE}/api/categories`),
@@ -104,6 +108,9 @@ export const useInventoryStore = defineStore('inventory', () => {
       if (groupsRes.ok) {
         const data = await groupsRes.json()
         groups.value = data.groups || []
+        totalGroups.value = data.total || 0
+        hasMore.value = data.has_more ?? false
+        currentPage.value = 0
       }
       if (statsRes.ok) {
         stats.value = await statsRes.json()
@@ -125,6 +132,36 @@ export const useInventoryStore = defineStore('inventory', () => {
     }
   }
 
+  async function loadMore() {
+    if (loadingMore.value || !hasMore.value || loading.value) return
+
+    loadingMore.value = true
+    try {
+      const nextPage = currentPage.value + 1
+      const offset = nextPage * getPageSize()
+
+      const params = new URLSearchParams()
+      params.set('limit', String(getPageSize()))
+      params.set('offset', String(offset))
+      if (selectedCategory.value) params.set('category', selectedCategory.value)
+      if (selectedStatus.value) params.set('status', selectedStatus.value)
+      if (searchQuery.value) params.set('search', searchQuery.value)
+
+      const response = await fetch(`${API_BASE}/api/groups?${params}`)
+      if (response.ok) {
+        const data = await response.json()
+        groups.value = [...groups.value, ...(data.groups || [])]
+        totalGroups.value = data.total || totalGroups.value
+        hasMore.value = data.has_more ?? false
+        currentPage.value = nextPage
+      }
+    } catch (e) {
+      console.error('Error loading more:', e)
+    } finally {
+      loadingMore.value = false
+    }
+  }
+
   function connectWebSocket() {
     // Определяем WS URL на основе API_BASE (для GitHub Pages / других хостов)
     let wsHost
@@ -137,7 +174,7 @@ export const useInventoryStore = defineStore('inventory', () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       wsHost = `${protocol}//${window.location.host}/ws`
     }
-    
+
     const ws = new WebSocket(wsHost)
 
     ws.onopen = () => {
@@ -222,7 +259,7 @@ export const useInventoryStore = defineStore('inventory', () => {
 
       const result = await response.json()
       addNotification('Файл загружен', result.message, 'success')
-      await fetchAll()
+      await fetchInitial()
       return result
     } catch (e) {
       addNotification('Ошибка загрузки', e.message, 'error')
@@ -251,7 +288,7 @@ export const useInventoryStore = defineStore('inventory', () => {
 
     const result = await response.json()
     addNotification('Группа отмечена', `${result.data.found_count} шт. найдено`, 'success')
-    await fetchAll()
+    await fetchInitial()
     return result
   }
 
@@ -268,7 +305,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     }
 
     addNotification('Отметка сброшена', `Результат для "${groupName}" сброшен`, 'info')
-    await fetchAll()
+    await fetchInitial()
   }
 
   function clearFilters() {
@@ -283,6 +320,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     stores,
     categories,
     loading,
+    loadingMore,
     connected,
     lastUpdate,
     notifications,
@@ -294,7 +332,10 @@ export const useInventoryStore = defineStore('inventory', () => {
     searchQuery,
     filteredGroups,
     hasDiscrepancies,
-    fetchAll,
+    hasMore,
+    totalGroups,
+    fetchInitial,
+    loadMore,
     connectWebSocket,
     addNotification,
     removeNotification,

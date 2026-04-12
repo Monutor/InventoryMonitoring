@@ -191,13 +191,15 @@ async def get_groups(
     category: Optional[str] = Query(None, description="Фильтр по категории"),
     status: Optional[str] = Query(None, description="Фильтр по статусу: counted, partial, not_counted"),
     search: Optional[str] = Query(None, description="Поиск по названию группы"),
+    limit: Optional[int] = Query(None, description="Лимит (пагинация)"),
+    offset: Optional[int] = Query(0, description="Смещение (пагинация)"),
 ):
-    """Получение списка товарных групп с фильтрами"""
+    """Получение списка товарных групп с фильтрами и пагинацией"""
     if not inventory_data:
-        return {"groups": [], "total": 0}
-    
+        return {"groups": [], "total": 0, "has_more": False}
+
     groups = inventory_data.get("groups", [])
-    
+
     # Применяем фильтры
     if store:
         groups = [g for g in groups if g.get("Магазин") == store]
@@ -217,8 +219,18 @@ async def get_groups(
     if search:
         search_lower = search.lower()
         groups = [g for g in groups if search_lower in g.get("Группа", "").lower()]
-    
-    return {"groups": groups, "total": len(groups)}
+
+    total = len(groups)
+
+    # Пагинация
+    if limit is not None:
+        paginated = groups[offset:offset + limit]
+        has_more = (offset + limit) < total
+    else:
+        paginated = groups
+        has_more = False
+
+    return {"groups": paginated, "total": total, "has_more": has_more}
 
 
 @app.get("/api/stats")
