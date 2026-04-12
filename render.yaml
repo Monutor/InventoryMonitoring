@@ -2,6 +2,7 @@ services:
   - type: web
     name: inventory-backend
     env: python
+    rootDir: backend
     region: frankfurt
     plan: free
     buildCommand: "pip install -r requirements.txt"
