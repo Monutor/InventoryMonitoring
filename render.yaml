@@ -11,11 +11,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
-      - key: RENDER_DATA_DIR
-        value: "/opt/render/inventory-data"
-      - key: RENDER_UPLOAD_DIR
-        value: "/opt/render/inventory-data/uploads"
-    disk:
-      name: inventory-data
-      mountPath: /opt/render/inventory-data
-      sizeGB: 1
+      - key: DATABASE_URL
+        sync: false

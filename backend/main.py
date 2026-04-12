@@ -21,9 +21,6 @@ from data_parser import parse_inventory_file
 from file_watcher import FileWatcher
 from database import init_db, upsert_manual_count, delete_manual_count, get_manual_count, get_all_manual_counts, merge_with_csv_data
 
-# Инициализируем БД при старте
-init_db()
-
 app = FastAPI(title="Inventory Monitor API", version="1.0.0")
 
 # CORS для разработки
@@ -415,8 +412,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup_event():
-    """Запуск файлового вотчера при старте"""
+    """Инициализация БД и запуск файлового вотчера при старте"""
     global inventory_data
+    
+    # Инициализируем PostgreSQL
+    import sys
+    try:
+        init_db()
+        print("[STARTUP] Database initialized", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[STARTUP] DB init error: {e}", file=sys.stderr, flush=True)
+    
     # Загружаем последний CSV файл при старте
     if os.path.exists(UPLOAD_DIR):
         csv_files = []
