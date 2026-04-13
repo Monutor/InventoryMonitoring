@@ -62,6 +62,25 @@ async def _send_to_clients(data: dict):
             connected_clients.remove(client)
 
 
+def _cleanup_uploads(keep: str = None):
+    """Удалить старые файлы из uploads/, оставив только keep"""
+    if not os.path.exists(UPLOAD_DIR):
+        return
+    for f in os.listdir(UPLOAD_DIR):
+        if keep and f == keep:
+            continue
+        ext = os.path.splitext(f)[1].lower()
+        if ext in ['.csv', '.xlsx', '.xls']:
+            fpath = os.path.join(UPLOAD_DIR, f)
+            try:
+                os.remove(fpath)
+                import sys
+                print(f"[CLEANUP] Removed old file: {f}", file=sys.stderr, flush=True)
+            except Exception as e:
+                import sys
+                print(f"[CLEANUP] Failed to remove {f}: {e}", file=sys.stderr, flush=True)
+
+
 def _broadcast_update(data: dict):
     """Рассылка обновлений всем подключённым клиентам"""
     global inventory_data
@@ -147,23 +166,51 @@ async def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
+@app.post("/api/cleanup")
+async def cleanup_old_files():
+    """Удалить старые CSV файлы, оставив только последний"""
+    if not os.path.exists(UPLOAD_DIR):
+        return {"status": "ok", "removed": []}
+
+    csv_files = []
+    for f in os.listdir(UPLOAD_DIR):
+        ext = os.path.splitext(f)[1].lower()
+        if ext in ['.csv', '.xlsx', '.xls']:
+            fpath = os.path.join(UPLOAD_DIR, f)
+            csv_files.append((f, os.path.getmtime(fpath), fpath))
+
+    if len(csv_files) <= 1:
+        return {"status": "ok", "removed": [], "message": "Нечего очищать"}
+
+    csv_files.sort(key=lambda x: x[1], reverse=True)
+    removed = []
+    for name, _, path in csv_files[1:]:
+        try:
+            os.remove(path)
+            removed.append(name)
+        except Exception as e:
+            pass
+
+    return {"status": "ok", "removed": removed, "kept": csv_files[0][0]}
+
+
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Загрузка CSV/Excel файла"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Файл не указан")
-    
+
     # Проверяем расширение
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ['.csv', '.xlsx', '.xls']:
         raise HTTPException(status_code=400, detail="Поддерживаются только CSV и Excel файлы")
-    
+
     # Сохраняем файл
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     content = await file.read()
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
     # Парсим файл и мержим с ручными отметками
     try:
         data = parse_inventory_file(file_path)
@@ -171,8 +218,12 @@ async def upload_file(file: UploadFile = File(...)):
         data["groups"] = merge_with_csv_data(data.get("groups", []))
         # Пересчитываем summary
         data["summary"] = _recalculate_summary(data["groups"])
-        
+
         inventory_data.update(data)
+
+        # Чистим старые файлы после успешной загрузки нового
+        _cleanup_uploads(keep=file.filename)
+
         # Рассылаем обновление
         await _send_to_clients({
             "type": "update",
@@ -426,7 +477,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def startup_event():
     """Инициализация БД и запуск файлового вотчера при старте"""
     global inventory_data
-    
+
     # Инициализируем PostgreSQL
     import sys
     try:
@@ -434,7 +485,7 @@ async def startup_event():
         print("[STARTUP] Database initialized", file=sys.stderr, flush=True)
     except Exception as e:
         print(f"[STARTUP] DB init error: {e}", file=sys.stderr, flush=True)
-    
+
     # Загружаем последний CSV файл при старте
     if os.path.exists(UPLOAD_DIR):
         csv_files = []
@@ -448,6 +499,10 @@ async def startup_event():
             # Берём самый свежий файл
             csv_files.sort(key=lambda x: x[1], reverse=True)
             latest_name, _, latest_path = csv_files[0]
+
+            # Удаляем все остальные CSV файлы (чистим мусор)
+            _cleanup_uploads(keep=latest_name)
+
             try:
                 data = parse_inventory_file(latest_path)
                 data["groups"] = merge_with_csv_data(data.get("groups", []))
