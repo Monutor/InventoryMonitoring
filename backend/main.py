@@ -440,25 +440,21 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         import sys
-        # Отправляем текущие данные при подключении
+        # Отправляем summary при подключении (без групп — они загрузятся через REST)
         print(f"[WS CONNECT] inventory_data keys={list(inventory_data.keys()) if inventory_data else 'EMPTY'}", file=sys.stderr, flush=True)
         if inventory_data:
             groups = inventory_data.get("groups")
             print(f"[WS CONNECT] groups count={len(groups) if groups else 0}", file=sys.stderr, flush=True)
-            # Пересчитываем summary актуальными данными
             if groups:
-                # Проверяем типы данных
-                sample = groups[:3]
-                for i, g in enumerate(sample):
-                    d = g.get("Доля", 0)
-                    print(f"[WS SAMPLE {i}] Доля={d!r} type={type(d).__name__}", file=sys.stderr, flush=True)
-
                 inventory_data["summary"] = _recalculate_summary(groups)
                 print(f"[WS AFTER RECALC] summary={inventory_data['summary']}", file=sys.stderr, flush=True)
             await websocket.send_text(json.dumps({
                 "type": "initial",
                 "timestamp": datetime.now().isoformat(),
-                "data": inventory_data
+                "data": {
+                    "summary": inventory_data.get("summary"),
+                    "file_name": inventory_data.get("file_name", ""),
+                }
             }, ensure_ascii=False))
         
         # Ждём сообщения от клиента (ping)

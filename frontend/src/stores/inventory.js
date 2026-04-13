@@ -201,6 +201,15 @@ export const useInventoryStore = defineStore('inventory', () => {
 
     const ws = new WebSocket(wsHost)
 
+    // Fallback: если WS не ответил за 3 секунды, загружаем данные через REST
+    let wsReady = false
+    const wsTimeout = setTimeout(() => {
+      if (!wsReady && groups.value.length === 0) {
+        console.log('[WS] Timeout, falling back to REST')
+        fetchInitial()
+      }
+    }, 3000)
+
     ws.onopen = () => {
       connected.value = true
       console.log('WebSocket connected')
@@ -225,10 +234,12 @@ export const useInventoryStore = defineStore('inventory', () => {
         const message = JSON.parse(event.data)
         
         if (message.type === 'initial') {
-          // При первом подключении принимаем данные из WS
+          wsReady = true
+          clearTimeout(wsTimeout)
+          // При первом подключении принимаем только summary из WS
           const data = message.data
           console.log('[WS] initial received, summary:', data.summary)
-          
+
           // Обновляем статистику
           if (data.summary) {
             stats.value = {
@@ -238,18 +249,9 @@ export const useInventoryStore = defineStore('inventory', () => {
           }
           fileName.value = data.file_name || ''
           lastUpdate.value = message.timestamp || new Date().toISOString()
-          
-          // Принимаем группы из WS, но только первую страницу для пагинации
-          if (data.groups && data.groups.length > 0) {
-            const pageSize = getPageSize()
-            groups.value = data.groups.slice(0, pageSize)
-            totalGroups.value = data.groups.length
-            hasMore.value = data.groups.length > pageSize
-            currentPage.value = 0
-          }
-          
-          // Загружаем stores и categories (они не приходят через WS полностью)
-          fetchStoresAndCategories()
+
+          // Группы загружаем через REST API (с пагинацией)
+          fetchInitial()
         }
         
         if (message.type === 'update') {

@@ -189,8 +189,8 @@ watch(() => store.filteredGroups.length, () => {
 })
 
 onMounted(async () => {
-  await store.fetchInitial()
   store.connectWebSocket()
+  // fetchInitial вызывается автоматически при получении WS 'initial'
   setupInfiniteScroll()
 })
 
