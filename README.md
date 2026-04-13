@@ -122,27 +122,6 @@ inventory-monitor/
 - `status` — статус: `counted`, `partial`, `not_counted`
 - `search` — поиск по названию группы
 
-## Деплой на Render.com
-
-> ⚠️ Деплой только по команде пользователя!
-
-### Шаги деплоя:
-
-1. Создайте новый **Web Service** на Render.com
-2. Подключите GitHub репозиторий
-3. Настройки сборки:
-   - **Build Command:** `cd frontend && npm install && npm run build`
-   - **Start Command:** `cd backend && pip install -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. Добавьте переменную окружения: `VITE_API_BASE` (если нужно)
-
-## Использование
-
-1. Откройте `http://localhost:3000`
-2. Загрузите файл инвентаризации
-3. Наблюдайте за прогрессом в реальном времени
-4. Используйте фильтры для навигации
-5. Кликайте на карточки для просмотра деталей
-
 ## Лицензия
 
 MIT
