@@ -59,6 +59,7 @@ export const useInventoryStore = defineStore('inventory', () => {
   const currentPage = ref(0)
   const hasMore = ref(true)
   const totalGroups = ref(0)
+  const loadingInitial = ref(false)
 
   // Filters
   const selectedCategory = ref('')
@@ -68,6 +69,7 @@ export const useInventoryStore = defineStore('inventory', () => {
   // Filters changed — reset pagination
   watch([selectedCategory, selectedStatus, searchQuery], () => {
     resetPagination()
+    fetchInitial()
   })
 
   function resetPagination() {
@@ -87,7 +89,28 @@ export const useInventoryStore = defineStore('inventory', () => {
   })
 
   // Actions
+  async function fetchStoresAndCategories() {
+    try {
+      const [storesRes, categoriesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/stores`),
+        fetch(`${API_BASE}/api/categories`),
+      ])
+      if (storesRes.ok) {
+        const data = await storesRes.json()
+        stores.value = data.stores || []
+      }
+      if (categoriesRes.ok) {
+        const data = await categoriesRes.json()
+        categories.value = data.categories || []
+      }
+    } catch (e) {
+      console.error('Error fetching stores/categories:', e)
+    }
+  }
+
   async function fetchInitial() {
+    if (loadingInitial.value) return // Prevent parallel requests
+    loadingInitial.value = true
     loading.value = true
     resetPagination()
     try {
@@ -129,6 +152,7 @@ export const useInventoryStore = defineStore('inventory', () => {
       console.error('Error fetching data:', e)
     } finally {
       loading.value = false
+      loadingInitial.value = false
     }
   }
 
@@ -199,10 +223,13 @@ export const useInventoryStore = defineStore('inventory', () => {
       }
       try {
         const message = JSON.parse(event.data)
-        if (message.type === 'initial' || message.type === 'update') {
+        
+        if (message.type === 'initial') {
+          // При первом подключении принимаем данные из WS
           const data = message.data
-          console.log('[WS]', message.type, 'summary:', data.summary)
-          groups.value = data.groups || []
+          console.log('[WS] initial received, summary:', data.summary)
+          
+          // Обновляем статистику
           if (data.summary) {
             stats.value = {
               ...stats.value,
@@ -211,10 +238,29 @@ export const useInventoryStore = defineStore('inventory', () => {
           }
           fileName.value = data.file_name || ''
           lastUpdate.value = message.timestamp || new Date().toISOString()
-
-          if (message.type === 'update') {
-            addNotification('Данные обновлены', `Файл: ${fileName.value}`, 'info')
+          
+          // Принимаем группы из WS, но только первую страницу для пагинации
+          if (data.groups && data.groups.length > 0) {
+            const pageSize = getPageSize()
+            groups.value = data.groups.slice(0, pageSize)
+            totalGroups.value = data.groups.length
+            hasMore.value = data.groups.length > pageSize
+            currentPage.value = 0
           }
+          
+          // Загружаем stores и categories (они не приходят через WS полностью)
+          fetchStoresAndCategories()
+        }
+        
+        if (message.type === 'update') {
+          // При обновлении (новый файл) перезагружаем данные
+          const data = message.data
+          console.log('[WS] update received, summary:', data.summary)
+          
+          addNotification('Данные обновлены', `Файл: ${data.file_name || 'неизвестен'}`, 'info')
+          
+          // Перезагружаем с начала
+          fetchInitial()
         }
       } catch (e) {
         console.error('Error parsing WS message:', e)
@@ -321,6 +367,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     categories,
     loading,
     loadingMore,
+    loadingInitial,
     connected,
     lastUpdate,
     notifications,
@@ -335,6 +382,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     hasMore,
     totalGroups,
     fetchInitial,
+    fetchAll: fetchInitial, // alias for backwards compatibility
     loadMore,
     connectWebSocket,
     addNotification,
