@@ -255,12 +255,23 @@ export const useInventoryStore = defineStore('inventory', () => {
         }
         
         if (message.type === 'update') {
-          // При обновлении (новый файл) перезагружаем данные
+          // При обновлении (новый файл или ручной ввод) перезагружаем данные
           const data = message.data
           console.log('[WS] update received, summary:', data.summary)
-          
-          addNotification('Данные обновлены', `Файл: ${data.file_name || 'неизвестен'}`, 'info')
-          
+
+          // Обновляем статистику
+          if (data.summary) {
+            stats.value = {
+              ...stats.value,
+              ...data.summary,
+            }
+          }
+          if (data.file_name) fileName.value = data.file_name
+          lastUpdate.value = message.timestamp || new Date().toISOString()
+
+          const pct = data.summary?.counted_percentage ?? 0
+          addNotification('Данные обновлены', `Готовность: ${pct}%`, 'info')
+
           // Перезагружаем с начала
           fetchInitial()
         }

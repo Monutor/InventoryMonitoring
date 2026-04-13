@@ -81,6 +81,38 @@ def _cleanup_uploads(keep: str = None):
                 print(f"[CLEANUP] Failed to remove {f}: {e}", file=sys.stderr, flush=True)
 
 
+def _send_update_to_clients():
+    """Отправить минимальное обновление (только summary + file_name, без групп)"""
+    if not inventory_data:
+        return
+    import sys
+    summary = inventory_data.get("summary", {})
+    file_name = inventory_data.get("file_name", "")
+    print(f"[WS UPDATE] Sending update: summary={summary}, file={file_name}", file=sys.stderr, flush=True)
+    message = json.dumps({
+        "type": "update",
+        "timestamp": datetime.now().isoformat(),
+        "data": {
+            "summary": summary,
+            "file_name": file_name,
+        }
+    }, ensure_ascii=False)
+    asyncio.create_task(_send_text_to_all(message))
+
+
+async def _send_text_to_all(text: str):
+    """Отправить текст всем подключённым клиентам"""
+    disconnected = []
+    for client in connected_clients:
+        try:
+            await client.send_text(text)
+        except Exception:
+            disconnected.append(client)
+    for client in disconnected:
+        if client in connected_clients:
+            connected_clients.remove(client)
+
+
 def _broadcast_update(data: dict):
     """Рассылка обновлений всем подключённым клиентам"""
     global inventory_data
@@ -91,7 +123,7 @@ def _broadcast_update(data: dict):
     inventory_data = data
     import sys
     print(f"[BROADCAST] summary={data.get('summary')}", file=sys.stderr, flush=True)
-    asyncio.create_task(_send_to_clients(data))
+    _send_update_to_clients()
 
 
 def _recalculate_summary(groups: list) -> dict:
@@ -224,12 +256,8 @@ async def upload_file(file: UploadFile = File(...)):
         # Чистим старые файлы после успешной загрузки нового
         _cleanup_uploads(keep=file.filename)
 
-        # Рассылаем обновление
-        await _send_to_clients({
-            "type": "update",
-            "timestamp": datetime.now().isoformat(),
-            "data": inventory_data
-        })
+        # Рассылаем минимальное обновление (только summary + file_name)
+        _send_update_to_clients()
         return {"status": "ok", "message": f"Файл {file.filename} загружен", "groups_count": len(data.get("groups", []))}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
@@ -389,17 +417,13 @@ async def count_group(group_id: str, request: CountRequest):
         shortage=request.shortage,
         defect=request.defect,
     )
-    
+
     # Обновляем данные в памяти
     _apply_manual_update_to_memory(group_id, request.store, result)
-    
-    # Рассылаем обновление
-    await _send_to_clients({
-        "type": "update",
-        "timestamp": datetime.now().isoformat(),
-        "data": inventory_data
-    })
-    
+
+    # Рассылаем минимальное обновление (только summary + file_name)
+    _send_update_to_clients()
+
     return CountResponse(status="ok", message="Группа отмечена", data=result)
 
 
@@ -410,17 +434,12 @@ class StoreParam(BaseModel):
 async def uncount_group(group_id: str, request: StoreParam):
     """Сбросить ручную отметку группы"""
     deleted = delete_manual_count(group_id, request.store)
-    
+
     if deleted:
         _remove_manual_from_memory(group_id, request.store)
-        
-        # Рассылаем обновление
-        await _send_to_clients({
-            "type": "update",
-            "timestamp": datetime.now().isoformat(),
-            "data": inventory_data
-        })
-    
+        # Рассылаем минимальное обновление (только summary + file_name)
+        _send_update_to_clients()
+
     return {"status": "ok", "deleted": deleted}
 
 
