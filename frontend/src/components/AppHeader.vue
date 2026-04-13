@@ -16,20 +16,20 @@
         </div>
 
         <!-- Статус подключения и обновление -->
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2 sm:gap-4">
           <!-- Индикатор подключения -->
-          <div class="flex items-center gap-2 text-sm">
-            <span 
+          <div class="flex items-center gap-1.5 sm:gap-2 text-sm">
+            <span
               class="w-2 h-2 rounded-full"
               :class="store.connected ? 'bg-green-500' : 'bg-red-500'"
             ></span>
-            <span class="text-gray-600 dark:text-gray-400">
+            <span class="text-gray-600 dark:text-gray-400 hidden sm:inline">
               {{ store.connected ? 'Онлайн' : 'Отключено' }}
             </span>
           </div>
 
           <!-- Время обновления -->
-          <div v-if="store.lastUpdate" class="text-xs text-gray-400 dark:text-gray-500">
+          <div v-if="store.lastUpdate" class="text-xs text-gray-400 dark:text-gray-500 hidden md:block">
             Обновлено: {{ formatTime(store.lastUpdate) }}
           </div>
 

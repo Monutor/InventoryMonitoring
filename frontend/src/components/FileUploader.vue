@@ -1,9 +1,9 @@
 <template>
   <div class="card">
-    <div class="flex items-center gap-4">
+    <div class="flex flex-col gap-3">
       <!-- Зона загрузки -->
-      <label 
-        class="flex-1 flex items-center justify-center gap-3 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-primary-500 hover:bg-primary-50 transition-colors"
+      <label
+        class="flex items-center justify-center gap-3 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-primary-500 hover:bg-primary-50 transition-colors w-full"
         :class="{ 'border-green-500 bg-green-50': dragOver }"
         @dragover.prevent="dragOver = true"
         @dragleave="dragOver = false"
@@ -15,18 +15,18 @@
         <span class="text-sm text-gray-600 dark:text-gray-400">
           <span class="font-medium text-primary-600">Нажмите для загрузки</span> или перетащите файл
         </span>
-        <input 
-          type="file" 
-          class="hidden" 
+        <input
+          type="file"
+          class="hidden"
           accept=".csv,.xlsx,.xls"
           @change="handleFileSelect"
         />
       </label>
 
       <!-- Статус -->
-      <div v-if="store.fileName" class="text-sm">
-        <div class="text-gray-500 dark:text-gray-400">Текущий файл:</div>
-        <div class="font-medium dark:text-gray-200">{{ store.fileName }}</div>
+      <div v-if="store.fileName" class="text-sm truncate">
+        <span class="text-gray-500 dark:text-gray-400">Текущий файл: </span>
+        <span class="font-medium dark:text-gray-200 truncate" :title="store.fileName">{{ store.fileName }}</span>
       </div>
     </div>
 
