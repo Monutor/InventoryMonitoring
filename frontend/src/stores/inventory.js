@@ -71,11 +71,18 @@ export const useInventoryStore = defineStore('inventory', () => {
 
   // Debounce timer для поиска
   let searchDebounceTimer = null
+  // Timer для задержки показа скелетона при смене фильтров
+  let filterLoadingTimer = null
 
-  // Фильтры категории/статуса/частоты — без задержки (редкие действия)
+  // Фильтры категории/статуса/частоты — скелетон через 300мс если запрос ещё не завершён
   watch([selectedCategory, selectedStatus, selectedFrequency], () => {
-    resetPagination()
-    fetchInitial()
+    filterLoadingTimer = setTimeout(() => {
+      searchLoading.value = true
+    }, 300)
+    fetchInitial().finally(() => {
+      clearTimeout(filterLoadingTimer)
+      searchLoading.value = false
+    })
   })
 
   // Поиск — с debounce 1000мс (чтобы не дёргать API на каждый символ)
@@ -83,7 +90,6 @@ export const useInventoryStore = defineStore('inventory', () => {
     clearTimeout(searchDebounceTimer)
     searchLoading.value = true
     searchDebounceTimer = setTimeout(() => {
-      resetPagination()
       fetchInitial().finally(() => {
         searchLoading.value = false
       })
@@ -95,6 +101,24 @@ export const useInventoryStore = defineStore('inventory', () => {
     currentPage.value = 0
     hasMore.value = true
     totalGroups.value = 0
+    resetCache()
+  }
+
+  // Фильтр-кэш: ключ → { groups, total, hasMore }
+  const filterCache = new Map()
+  const MAX_CACHE_SIZE = 10
+
+  function getCacheKey() {
+    return JSON.stringify({
+      category: selectedCategory.value,
+      frequency: selectedFrequency.value,
+      status: selectedStatus.value,
+      search: searchQuery.value,
+    })
+  }
+
+  function resetCache() {
+    filterCache.clear()
   }
 
   // Computed — groups уже отфильтрованы сервером
@@ -128,9 +152,24 @@ export const useInventoryStore = defineStore('inventory', () => {
 
   async function fetchInitial() {
     if (loadingInitial.value) return // Prevent parallel requests
+
+    const cacheKey = getCacheKey()
+
+    // Проверяем кэш
+    if (filterCache.has(cacheKey)) {
+      const cached = filterCache.get(cacheKey)
+      groups.value = cached.groups
+      totalGroups.value = cached.total
+      hasMore.value = cached.hasMore
+      currentPage.value = 0
+      lastUpdate.value = new Date().toISOString()
+      loading.value = false
+      loadingInitial.value = false
+      return // Используем кэш, без запроса
+    }
+
     loadingInitial.value = true
     loading.value = true
-    resetPagination()
     try {
       const params = new URLSearchParams()
       params.set('limit', String(getPageSize()))
@@ -150,10 +189,25 @@ export const useInventoryStore = defineStore('inventory', () => {
 
       if (groupsRes.ok) {
         const data = await groupsRes.json()
-        groups.value = data.groups || []
-        totalGroups.value = data.total || 0
-        hasMore.value = data.has_more ?? false
+        const newGroups = data.groups || []
+        const newTotal = data.total || 0
+        const newHasMore = data.has_more ?? false
+
+        groups.value = newGroups
+        totalGroups.value = newTotal
+        hasMore.value = newHasMore
         currentPage.value = 0
+
+        // Сохраняем в кэш (LRU: удаляем oldest при переполнении)
+        if (filterCache.size >= MAX_CACHE_SIZE) {
+          const firstKey = filterCache.keys().next().value
+          filterCache.delete(firstKey)
+        }
+        filterCache.set(cacheKey, {
+          groups: newGroups,
+          total: newTotal,
+          hasMore: newHasMore,
+        })
       }
       if (statsRes.ok) {
         stats.value = await statsRes.json()
@@ -297,7 +351,8 @@ export const useInventoryStore = defineStore('inventory', () => {
           const pct = data.summary?.counted_percentage ?? 0
           addNotification('Данные обновлены', `Готовность: ${pct}%`, 'info')
 
-          // Перезагружаем с начала
+          // Перезагружаем с начала (новый файл — полная замена данных)
+          resetPagination()
           fetchInitial()
         }
       } catch (e) {
@@ -326,9 +381,10 @@ export const useInventoryStore = defineStore('inventory', () => {
     notifications.value = notifications.value.filter(n => n.id !== id)
   }
 
-  async function uploadFile(file) {
+  async function uploadFile(file, skipHeaderRows = 0) {
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('skip_header_rows', String(skipHeaderRows))
 
     try {
       const response = await fetch(`${API_BASE}/api/upload`, {
@@ -343,6 +399,7 @@ export const useInventoryStore = defineStore('inventory', () => {
 
       const result = await response.json()
       addNotification('Файл загружен', result.message, 'success')
+      resetPagination()
       await fetchInitial()
       return result
     } catch (e) {
@@ -353,6 +410,7 @@ export const useInventoryStore = defineStore('inventory', () => {
 
   function clearFilters() {
     clearTimeout(searchDebounceTimer)
+    clearTimeout(filterLoadingTimer)
     selectedCategory.value = ''
     selectedStatus.value = ''
     selectedFrequency.value = ''
@@ -391,5 +449,6 @@ export const useInventoryStore = defineStore('inventory', () => {
     removeNotification,
     uploadFile,
     clearFilters,
+    resetCache,
   }
 })

@@ -53,8 +53,11 @@
             <p v-if="!store.searchLoading" class="text-sm text-gray-600 dark:text-gray-400">
               Показано: <span class="font-medium">{{ store.filteredGroups.length }}</span> из <span class="font-medium">{{ store.totalGroups }}</span> групп
             </p>
-            <p v-else class="text-sm text-gray-600 dark:text-gray-400">
+            <p v-else-if="store.searchQuery" class="text-sm text-gray-600 dark:text-gray-400">
               Поиск...
+            </p>
+            <p v-else class="text-sm text-gray-600 dark:text-gray-400">
+              Загрузка...
             </p>
             <!-- Сортировка -->
             <DropdownSelect
@@ -74,10 +77,19 @@
             />
           </div>
 
-          <!-- Скелетон при поиске -->
-          <div v-if="store.searchLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <SkeletonCard v-for="i in getPageSize()" :key="i" />
-          </div>
+          <!-- Скелетон при поиске/фильтрах -->
+          <Transition
+            enter-active-class="transition-opacity duration-300"
+            enter-from-class="opacity-0"
+            enter-to-class="opacity-100"
+            leave-active-class="transition-opacity duration-200"
+            leave-from-class="opacity-100"
+            leave-to-class="opacity-0"
+          >
+            <div v-if="store.searchLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <SkeletonCard v-for="i in getPageSize()" :key="i" />
+            </div>
+          </Transition>
 
           <!-- Sentinel для бесконечного скролла -->
           <div ref="sentinel" class="py-8 text-center">

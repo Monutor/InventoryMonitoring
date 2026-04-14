@@ -9,10 +9,14 @@ from typing import Dict, List, Any
 from datetime import datetime
 
 
-def parse_inventory_file(file_path: str) -> Dict[str, Any]:
+def parse_inventory_file(file_path: str, skip_header_rows: int = 0) -> Dict[str, Any]:
     """
     Парсинг файла инвентаризации (CSV или Excel)
-    
+
+    Args:
+        file_path: Путь к файлу
+        skip_header_rows: Количество строк для пропуска в начале (для SAP-отчётов)
+
     Возвращает структуру:
     {
         "parsed_at": "2026-04-11T...",
@@ -23,12 +27,12 @@ def parse_inventory_file(file_path: str) -> Dict[str, Any]:
     """
     file_name = os.path.basename(file_path)
     ext = os.path.splitext(file_name)[1].lower()
-    
+
     rows = []
     if ext == '.csv':
         rows = _read_csv_file(file_path)
     elif ext in ['.xlsx', '.xls']:
-        rows = _read_excel_file(file_path)
+        rows = _read_excel_file(file_path, skip_header_rows=skip_header_rows)
     else:
         raise ValueError(f"Неподдерживаемый формат: {ext}")
     
@@ -41,11 +45,20 @@ def parse_inventory_file(file_path: str) -> Dict[str, Any]:
             continue
         
         # Парсим долю
-        доля_str = str(row.get('Доля', '')).strip().replace('%', '')
-        try:
-            доля = float(доля_str) if доля_str and доля_str != 'nan' else 0.0
-        except ValueError:
-            доля = 0.0
+        доля_raw = row.get('Доля', '')
+
+        # Excel может хранить проценты как десятичную дробь (0.5 вместо 50)
+        if isinstance(доля_raw, (int, float)):
+            доля = float(доля_raw)
+            if 0 < доля <= 1:
+                доля = доля * 100  # Конвертируем 0.5 → 50
+            доля = round(доля, 1)
+        else:
+            доля_str = str(доля_raw).strip().replace('%', '')
+            try:
+                доля = float(доля_str) if доля_str and доля_str != 'nan' else 0.0
+            except ValueError:
+                доля = 0.0
         
         def safe_int(val, default=0):
             try:
@@ -129,19 +142,26 @@ def _read_csv_file(file_path: str) -> List[Dict[str, str]]:
         return _normalize_columns(list(reader))
 
 
-def _read_excel_file(file_path: str) -> List[Dict[str, str]]:
+def _read_excel_file(file_path: str, skip_header_rows: int = 0) -> List[Dict[str, str]]:
     """
     Чтение Excel файла через openpyxl
     """
     from openpyxl import load_workbook
-    
-    wb = load_workbook(filename=file_path, read_only=True, data_only=True)
+
+    wb = load_workbook(filename=file_path, read_only=True)
     ws = wb.active
-    
+
     rows = []
     headers = None
-    
+    row_num = 0
+
     for row in ws.iter_rows(values_only=True):
+        row_num += 1
+        # Пропускаем первые N строк (служебные строки SAP: дата, имя отчёта и т.д.)
+        if skip_header_rows > 0 and row_num <= skip_header_rows:
+            continue
+
+        # Первая строка после пропуска — это заголовки
         if headers is None:
             headers = [str(h).strip() if h else '' for h in row]
         else:
@@ -150,7 +170,7 @@ def _read_excel_file(file_path: str) -> List[Dict[str, str]]:
                 if i < len(headers):
                     row_dict[headers[i]] = val if val is not None else ''
             rows.append(row_dict)
-    
+
     wb.close()
     return _normalize_columns(rows)
 

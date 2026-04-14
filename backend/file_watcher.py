@@ -66,17 +66,17 @@ class FileWatcher:
         """Цикл мониторинга с проверкой каждые 2 секунды"""
         while self._running:
             try:
-                self._check_for_changes()
+                await self._check_for_changes()
             except Exception as e:
                 print(f"File watcher error: {e}")
-            
+
             await asyncio.sleep(2)
-    
-    def _check_for_changes(self):
-        """Проверка на новые или изменённые файлы"""
+
+    async def _check_for_changes(self):
+        """Проверка на новые или изменённые файлы (async-safe)"""
         if not os.path.exists(self.watch_dir):
             return
-        
+
         current_files = {}
         for filename in os.listdir(self.watch_dir):
             if filename.startswith('.'):
@@ -89,22 +89,23 @@ class FileWatcher:
                     current_files[filename] = mtime
                 except OSError:
                     pass
-        
+
         # Проверяем новые или изменённые файлы
         changed_files = []
         for filename, mtime in current_files.items():
             if filename not in self._file_times or current_files[filename] > self._file_times.get(filename, 0):
                 changed_files.append(filename)
-        
-        # Парсим изменённые файлы
+
+        # Парсим изменённые файлы в отдельном потоке (не блокируем event loop)
         for filename in changed_files:
             file_path = os.path.join(self.watch_dir, filename)
             try:
-                data = parse_inventory_file(file_path)
+                # Файлы из папки uploads/ обычно без SAP-заголовков — skip=0
+                data = await asyncio.to_thread(parse_inventory_file, file_path, 0)
                 self.on_new_data(data)
                 print(f"[{datetime.now().isoformat()}] Parsed: {filename}")
             except Exception as e:
                 print(f"[{datetime.now().isoformat()}] Error parsing {filename}: {e}")
-        
+
         # Обновляем известные файлы
         self._file_times = current_files

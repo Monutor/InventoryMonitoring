@@ -4,13 +4,15 @@ Real-time inventory tracking with WebSocket updates
 """
 
 import os
+import sys
 import json
 import math
 import asyncio
+from pathlib import PurePath
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 from data_parser import parse_inventory_file
@@ -19,22 +21,44 @@ from database import init_db
 
 app = FastAPI(title="Inventory Monitor API", version="1.0.0")
 
-# CORS для разработки
+# CORS — конкретный origin вместо wildcard
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Максимальный размер файла (50 МБ)
+MAX_FILE_SIZE = 50 * 1024 * 1024
+
 # Хранилище данных
 inventory_data: dict = {}
 connected_clients: List[WebSocket] = []
+_data_lock = asyncio.Lock()
 
 # Файловый вотчер — на Render используем persistent disk
 UPLOAD_DIR = os.environ.get("RENDER_UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def _safe_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal."""
+    name = PurePath(filename).name
+    if not name or name.startswith('.'):
+        raise ValueError(f"Недопустимое имя файла: {filename}")
+    # Проверяем, что путь остаётся внутри UPLOAD_DIR
+    full = os.path.realpath(os.path.join(UPLOAD_DIR, name))
+    if not full.startswith(os.path.realpath(UPLOAD_DIR)):
+        raise ValueError(f"Подозрительный путь: {filename}")
+    return name
+
+
+async def _safe_parse(file_path: str, skip_header_rows: int = 0) -> dict:
+    """Parse file in a thread pool to avoid blocking the event loop."""
+    return await asyncio.to_thread(parse_inventory_file, file_path, skip_header_rows)
 
 
 async def _send_to_clients(data: dict):
@@ -44,18 +68,19 @@ async def _send_to_clients(data: dict):
         "timestamp": datetime.now().isoformat(),
         "data": data
     }, ensure_ascii=False)
-    
+
     disconnected = []
     for client in connected_clients:
         try:
             await client.send_text(message)
         except Exception:
             disconnected.append(client)
-    
-    # Удаляем отключённых клиентов
+
     for client in disconnected:
-        if client in connected_clients:
+        try:
             connected_clients.remove(client)
+        except ValueError:
+            pass
 
 
 def _cleanup_uploads(keep: str = None):
@@ -70,18 +95,15 @@ def _cleanup_uploads(keep: str = None):
             fpath = os.path.join(UPLOAD_DIR, f)
             try:
                 os.remove(fpath)
-                import sys
                 print(f"[CLEANUP] Removed old file: {f}", file=sys.stderr, flush=True)
             except Exception as e:
-                import sys
                 print(f"[CLEANUP] Failed to remove {f}: {e}", file=sys.stderr, flush=True)
 
 
-def _send_update_to_clients():
+async def _send_update_to_clients():
     """Отправить минимальное обновление (только summary + file_name, без групп)"""
     if not inventory_data:
         return
-    import sys
     summary = inventory_data.get("summary", {})
     file_name = inventory_data.get("file_name", "")
     print(f"[WS UPDATE] Sending update: summary={summary}, file={file_name}", file=sys.stderr, flush=True)
@@ -93,7 +115,14 @@ def _send_update_to_clients():
             "file_name": file_name,
         }
     }, ensure_ascii=False)
-    asyncio.create_task(_send_text_to_all(message))
+
+    async def _do_send():
+        try:
+            await _send_text_to_all(message)
+        except Exception as e:
+            print(f"[WS ERROR] Failed to send update: {e}", file=sys.stderr, flush=True)
+
+    asyncio.create_task(_do_send())
 
 
 async def _send_text_to_all(text: str):
@@ -104,20 +133,27 @@ async def _send_text_to_all(text: str):
             await client.send_text(text)
         except Exception:
             disconnected.append(client)
+
     for client in disconnected:
-        if client in connected_clients:
+        try:
             connected_clients.remove(client)
+        except ValueError:
+            pass
 
 
 def _broadcast_update(data: dict):
     """Рассылка обновлений всем подключённым клиентам"""
     global inventory_data
-    # Пересчитываем summary
     data["summary"] = _recalculate_summary(data["groups"])
     inventory_data = data
-    import sys
     print(f"[BROADCAST] summary={data.get('summary')}", file=sys.stderr, flush=True)
-    _send_update_to_clients()
+    # Fire-and-forget с обработкой ошибок
+    async def _do_broadcast():
+        try:
+            await _send_update_to_clients()
+        except Exception as e:
+            print(f"[BROADCAST ERROR] {e}", file=sys.stderr, flush=True)
+    asyncio.create_task(_do_broadcast())
 
 
 def _recalculate_summary(groups: list) -> dict:
@@ -127,7 +163,6 @@ def _recalculate_summary(groups: list) -> dict:
     partial = sum(1 for g in groups if 0 < g.get("Доля", 0) < 100)
     not_counted = sum(1 for g in groups if g.get("Доля", 0) == 0)
 
-    # Готовность = средний процент выполнения по всем группам (округление в большую сторону)
     raw_percentage = sum(g.get("Доля", 0) for g in groups) / total if total > 0 else 0
     avg_percentage = math.ceil(raw_percentage) if raw_percentage > 0 else 0
 
@@ -180,38 +215,62 @@ async def cleanup_old_files():
 
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    skip_header_rows: int = Form(0),
+):
     """Загрузка CSV/Excel файла"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Файл не указан")
 
+    # Path traversal защита
+    try:
+        safe_name = _safe_filename(file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # Проверяем расширение
-    ext = os.path.splitext(file.filename)[1].lower()
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in ['.csv', '.xlsx', '.xls']:
         raise HTTPException(status_code=400, detail="Поддерживаются только CSV и Excel файлы")
 
-    # Сохраняем файл
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    # Проверяем размер файла
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Файл слишком большой. Максимум: {MAX_FILE_SIZE // (1024*1024)} МБ"
+        )
+
+    # Сохраняем файл
+    file_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Парсим файл
+    # Парсим файл в отдельном потоке (не блокируем event loop)
     try:
-        data = parse_inventory_file(file_path)
-        # Пересчитываем summary
+        data = await asyncio.to_thread(parse_inventory_file, file_path, skip_header_rows)
         data["summary"] = _recalculate_summary(data["groups"])
+        data["file_name"] = safe_name
 
-        inventory_data.update(data)
+        async with _data_lock:
+            inventory_data.clear()
+            inventory_data.update(data)
 
         # Чистим старые файлы после успешной загрузки нового
-        _cleanup_uploads(keep=file.filename)
+        _cleanup_uploads(keep=safe_name)
 
-        # Рассылаем минимальное обновление (только summary + file_name)
-        _send_update_to_clients()
-        return {"status": "ok", "message": f"Файл {file.filename} загружен", "groups_count": len(data.get("groups", []))}
+        # Рассылаем обновление
+        await _send_update_to_clients()
+
+        msg = f"Файл {safe_name} загружен"
+        if skip_header_rows > 0:
+            msg += f" (пропущено первых {skip_header_rows} строк)"
+        return {"status": "ok", "message": msg, "groups_count": len(data.get("groups", []))}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка парсинга: {str(e)}")
+        raise HTTPException(status_code=500, detail="Ошибка парсинга файла")
 
 
 @app.get("/api/groups")
@@ -361,17 +420,17 @@ async def get_frequencies():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_clients.append(websocket)
-    
+
     try:
-        import sys
         # Отправляем summary при подключении (без групп — они загрузятся через REST)
         print(f"[WS CONNECT] inventory_data keys={list(inventory_data.keys()) if inventory_data else 'EMPTY'}", file=sys.stderr, flush=True)
         if inventory_data:
             groups = inventory_data.get("groups")
             print(f"[WS CONNECT] groups count={len(groups) if groups else 0}", file=sys.stderr, flush=True)
             if groups:
-                inventory_data["summary"] = _recalculate_summary(groups)
-                print(f"[WS AFTER RECALC] summary={inventory_data['summary']}", file=sys.stderr, flush=True)
+                async with _data_lock:
+                    inventory_data["summary"] = _recalculate_summary(groups)
+                    print(f"[WS AFTER RECALC] summary={inventory_data['summary']}", file=sys.stderr, flush=True)
             await websocket.send_text(json.dumps({
                 "type": "initial",
                 "timestamp": datetime.now().isoformat(),
@@ -380,7 +439,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "file_name": inventory_data.get("file_name", ""),
                 }
             }, ensure_ascii=False))
-        
+
         # Ждём сообщения от клиента (ping)
         while True:
             data = await websocket.receive_text()
@@ -389,6 +448,14 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in connected_clients:
             connected_clients.remove(websocket)
+    except Exception as e:
+        # Перехватываем ConnectionClosed и другие ошибки
+        print(f"[WS ERROR] {e}", file=sys.stderr, flush=True)
+        if websocket in connected_clients:
+            try:
+                connected_clients.remove(websocket)
+            except ValueError:
+                pass
 
 
 # ==================== Запуск файлового вотчера ====================
@@ -398,15 +465,13 @@ async def startup_event():
     """Инициализация БД и запуск файлового вотчера при старте"""
     global inventory_data
 
-    # Инициализируем PostgreSQL
-    import sys
     try:
         init_db()
         print("[STARTUP] Database initialized", file=sys.stderr, flush=True)
     except Exception as e:
         print(f"[STARTUP] DB init error: {e}", file=sys.stderr, flush=True)
 
-    # Загружаем последний CSV файл при старте
+    # Загружаем последний CSV файл при старте (в отдельном потоке)
     if os.path.exists(UPLOAD_DIR):
         csv_files = []
         for f in os.listdir(UPLOAD_DIR):
@@ -416,18 +481,17 @@ async def startup_event():
                 csv_files.append((f, os.path.getmtime(fpath), fpath))
 
         if csv_files:
-            # Берём самый свежий файл
             csv_files.sort(key=lambda x: x[1], reverse=True)
             latest_name, _, latest_path = csv_files[0]
-
-            # Удаляем все остальные CSV файлы (чистим мусор)
             _cleanup_uploads(keep=latest_name)
 
             try:
-                data = parse_inventory_file(latest_path)
+                data = await _safe_parse(latest_path)
                 data["summary"] = _recalculate_summary(data["groups"])
                 data["file_name"] = latest_name
-                inventory_data = data
+                async with _data_lock:
+                    inventory_data.clear()
+                    inventory_data.update(data)
                 print(f"[STARTUP] Loaded: {latest_name}, groups={len(data['groups'])}, pct={data['summary']['counted_percentage']}%")
             except Exception as e:
                 print(f"[STARTUP] Error loading {latest_name}: {e}")

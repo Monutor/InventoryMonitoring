@@ -23,6 +23,39 @@
         />
       </label>
 
+      <!-- Опции загрузки -->
+      <div
+        class="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg cursor-pointer select-none transition-colors hover:bg-gray-100 dark:hover:bg-gray-800"
+        @click="skipHeaderRows = !skipHeaderRows"
+      >
+        <!-- Кастомный чекбокс -->
+        <div
+          class="w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all duration-200"
+          :class="skipHeaderRows
+            ? 'border-primary-500 bg-primary-500 scale-100'
+            : 'border-gray-300 dark:border-gray-600 bg-transparent scale-95'"
+        >
+          <svg
+            v-if="skipHeaderRows"
+            class="w-3.5 h-3.5 text-white"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+
+        <div class="flex flex-col">
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Пропустить первые 2 строки
+          </span>
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            Служебные строки SAP: дата, имя отчёта
+          </span>
+        </div>
+      </div>
+
       <!-- Статус -->
       <div v-if="store.fileName" class="text-sm truncate">
         <span class="text-gray-500 dark:text-gray-400">Текущий файл: </span>
@@ -55,6 +88,7 @@ import { useInventoryStore } from '@/stores/inventory'
 const store = useInventoryStore()
 const uploading = ref(false)
 const dragOver = ref(false)
+const skipHeaderRows = ref(true)
 
 async function handleFileSelect(event) {
   const file = event.target.files[0]
@@ -76,7 +110,7 @@ async function handleDrop(event) {
 async function uploadFile(file) {
   uploading.value = true
   try {
-    await store.uploadFile(file)
+    await store.uploadFile(file, skipHeaderRows.value ? 2 : 0)
   } catch (e) {
     console.error('Upload failed:', e)
   } finally {
