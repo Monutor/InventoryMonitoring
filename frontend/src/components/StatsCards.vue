@@ -1,5 +1,5 @@
 <template>
-  <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+  <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
     <div class="card text-center">
       <div class="text-2xl font-bold text-gray-900 dark:text-gray-100">{{ stats.total_groups }}</div>
       <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">Всего групп</div>
@@ -23,11 +23,6 @@
     <div class="card text-center">
       <div class="text-2xl font-bold text-primary-600 dark:text-primary-400">{{ stats.counted_percentage }}%</div>
       <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">Готовность</div>
-    </div>
-
-    <div class="card text-center border-l-4 border-purple-500">
-      <div class="text-2xl font-bold text-purple-600 dark:text-purple-400">{{ stats.manual_counts || 0 }}</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">📝 Ручные</div>
     </div>
 
     <div class="card text-center">

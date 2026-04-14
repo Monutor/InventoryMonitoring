@@ -38,7 +38,7 @@
         <!-- Список групп -->
         <section>
           <!-- Пустое состояние -->
-          <div v-if="store.filteredGroups.length === 0" class="card text-center py-12">
+          <div v-if="store.filteredGroups.length === 0 && !store.searchLoading" class="card text-center py-12">
             <svg class="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
             </svg>
@@ -49,12 +49,16 @@
           </div>
 
           <!-- Счётчик результатов -->
-          <div v-if="store.filteredGroups.length > 0" class="mb-4 flex items-center justify-between">
-            <p class="text-sm text-gray-600 dark:text-gray-400">
+          <div v-if="store.filteredGroups.length > 0 || store.searchLoading" class="mb-4 flex items-center justify-between">
+            <p v-if="!store.searchLoading" class="text-sm text-gray-600 dark:text-gray-400">
               Показано: <span class="font-medium">{{ store.filteredGroups.length }}</span> из <span class="font-medium">{{ store.totalGroups }}</span> групп
+            </p>
+            <p v-else class="text-sm text-gray-600 dark:text-gray-400">
+              Поиск...
             </p>
             <!-- Сортировка -->
             <DropdownSelect
+              v-if="!store.searchLoading"
               v-model="sortBy"
               :options="sortOptions"
               class="w-[200px]"
@@ -62,13 +66,17 @@
           </div>
 
           <!-- Сетка карточек -->
-          <div v-if="sortedGroups.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div v-if="sortedGroups.length > 0 && !store.searchLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <GroupCard
               v-for="group in sortedGroups"
               :key="group['Группа ID']"
               :group="group"
-              @count="openCountModal"
             />
+          </div>
+
+          <!-- Скелетон при поиске -->
+          <div v-if="store.searchLoading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <SkeletonCard v-for="i in getPageSize()" :key="i" />
           </div>
 
           <!-- Sentinel для бесконечного скролла -->
@@ -87,19 +95,17 @@
         </section>
       </template>
     </main>
-
-    <!-- Модалка ручного ввода -->
-    <CountModal 
-      :group="selectedGroupForCount"
-      @close="selectedGroupForCount = null"
-      @saved="selectedGroupForCount = null"
-    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useInventoryStore } from '@/stores/inventory'
+
+// Адаптивный размер страницы: мобилка — 15, десктоп — 30
+function getPageSize() {
+  return window.innerWidth < 768 ? 15 : 30
+}
 
 import StatsCards from '@/components/StatsCards.vue'
 import FiltersBar from '@/components/FiltersBar.vue'
@@ -108,16 +114,11 @@ import FileUploader from '@/components/FileUploader.vue'
 import Notifications from '@/components/Notifications.vue'
 import AppHeader from '@/components/AppHeader.vue'
 import DropdownSelect from '@/components/DropdownSelect.vue'
-import CountModal from '@/components/CountModal.vue'
+import SkeletonCard from '@/components/SkeletonCard.vue'
 
 const store = useInventoryStore()
 const sortBy = ref('status')
-const selectedGroupForCount = ref(null)
 const sentinel = ref(null)
-
-function openCountModal(group) {
-  selectedGroupForCount.value = group
-}
 
 const sortOptions = computed(() => [
   { value: 'status', label: '📊 По статусу' },
@@ -126,7 +127,7 @@ const sortOptions = computed(() => [
   { value: 'discrepancies', label: '⚠️ С расхождениями' },
 ])
 
-const isLoading = computed(() => store.loading && store.groups.length === 0)
+const isLoading = computed(() => store.loadingInitial && store.groups.length === 0)
 
 const sortedGroups = computed(() => {
   let groups = [...store.filteredGroups]
@@ -184,8 +185,17 @@ function setupInfiniteScroll() {
 // Пересоздаём observer при изменении фильтров (с задержкой, чтобы данные обновились)
 let filterWatchTimer = null
 watch(() => store.filteredGroups.length, () => {
+  if (store.searchLoading) return // Не пересоздаём во время поиска
   clearTimeout(filterWatchTimer)
   filterWatchTimer = setTimeout(setupInfiniteScroll, 200)
+})
+
+// Пересоздаём observer после завершения поиска
+watch(() => store.searchLoading, (val) => {
+  if (!val) {
+    clearTimeout(filterWatchTimer)
+    filterWatchTimer = setTimeout(setupInfiniteScroll, 200)
+  }
 })
 
 onMounted(async () => {

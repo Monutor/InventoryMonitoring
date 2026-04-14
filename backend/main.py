@@ -9,17 +9,13 @@ import math
 import asyncio
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
 from data_parser import parse_inventory_file
 from file_watcher import FileWatcher
-from database import init_db, upsert_manual_count, delete_manual_count, get_manual_count, get_all_manual_counts, merge_with_csv_data
+from database import init_db
 
 app = FastAPI(title="Inventory Monitor API", version="1.0.0")
 
@@ -116,8 +112,6 @@ async def _send_text_to_all(text: str):
 def _broadcast_update(data: dict):
     """Рассылка обновлений всем подключённым клиентам"""
     global inventory_data
-    # Мержим данные из CSV с ручными отметками из SQLite
-    data["groups"] = merge_with_csv_data(data.get("groups", []))
     # Пересчитываем summary
     data["summary"] = _recalculate_summary(data["groups"])
     inventory_data = data
@@ -132,7 +126,6 @@ def _recalculate_summary(groups: list) -> dict:
     counted = sum(1 for g in groups if g.get("Доля", 0) == 100)
     partial = sum(1 for g in groups if 0 < g.get("Доля", 0) < 100)
     not_counted = sum(1 for g in groups if g.get("Доля", 0) == 0)
-    manual = sum(1 for g in groups if g.get("is_manual"))
 
     # Готовность = средний процент выполнения по всем группам (округление в большую сторону)
     raw_percentage = sum(g.get("Доля", 0) for g in groups) / total if total > 0 else 0
@@ -144,47 +137,7 @@ def _recalculate_summary(groups: list) -> dict:
         "partial_groups": partial,
         "not_counted_groups": not_counted,
         "counted_percentage": avg_percentage,
-        "manual_counts": manual,
     }
-
-
-def _apply_manual_update_to_memory(group_id: str, store: str, result: dict):
-    """Применить ручную отметку к данным в памяти"""
-    if not inventory_data:
-        return
-    
-    for group in inventory_data.get("groups", []):
-        if group.get("Группа ID") == group_id and group.get("Магазин") == store:
-            group["Найдено"] = result["found_count"]
-            group["Излишки"] = result["surplus"]
-            group["Недостачи"] = result["shortage"]
-            group["Брак"] = result["defect"]
-            group["Доля"] = result["percentage"]
-            group["Посчитано групп"] = 1 if result["percentage"] > 0 else 0
-            group["is_manual"] = True
-            group["manual_updated_at"] = result["updated_at"]
-            break
-    
-    # Пересчитываем summary
-    if inventory_data.get("groups"):
-        inventory_data["summary"] = _recalculate_summary(inventory_data["groups"])
-
-
-def _remove_manual_from_memory(group_id: str, store: str):
-    """Удалить ручную отметку из данных в памяти"""
-    if not inventory_data:
-        return
-    
-    for group in inventory_data.get("groups", []):
-        if group.get("Группа ID") == group_id and group.get("Магазин") == store:
-            # Возвращаем к CSV данным (или 0% если в CSV не было)
-            group["is_manual"] = False
-            group["manual_updated_at"] = None
-            break
-    
-    # Пересчитываем summary
-    if inventory_data.get("groups"):
-        inventory_data["summary"] = _recalculate_summary(inventory_data["groups"])
 
 
 # Создаём вотчер после определения функций
@@ -243,11 +196,9 @@ async def upload_file(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Парсим файл и мержим с ручными отметками
+    # Парсим файл
     try:
         data = parse_inventory_file(file_path)
-        # Мержим данные из CSV с ручными отметками из SQLite
-        data["groups"] = merge_with_csv_data(data.get("groups", []))
         # Пересчитываем summary
         data["summary"] = _recalculate_summary(data["groups"])
 
@@ -268,6 +219,7 @@ async def get_groups(
     store: Optional[str] = Query(None, description="Фильтр по магазину"),
     division: Optional[str] = Query(None, description="Фильтр по дивизиону"),
     category: Optional[str] = Query(None, description="Фильтр по категории"),
+    frequency: Optional[str] = Query(None, description="Фильтр по частоте подсчёта"),
     status: Optional[str] = Query(None, description="Фильтр по статусу: counted, partial, not_counted"),
     search: Optional[str] = Query(None, description="Поиск по названию группы"),
     limit: Optional[int] = Query(None, description="Лимит (пагинация)"),
@@ -286,6 +238,8 @@ async def get_groups(
         groups = [g for g in groups if g.get("Дивизион ASM") == division]
     if category:
         groups = [g for g in groups if g.get("Категория") == category]
+    if frequency:
+        groups = [g for g in groups if g.get("Частота подсчета") == frequency]
     if status:
         if status == "counted":
             groups = [g for g in groups if g.get("Доля", 0) == 100]
@@ -293,8 +247,6 @@ async def get_groups(
             groups = [g for g in groups if 0 < g.get("Доля", 0) < 100]
         elif status == "not_counted":
             groups = [g for g in groups if g.get("Доля", 0) == 0]
-        elif status == "manual":
-            groups = [g for g in groups if g.get("is_manual")]
     if search:
         search_lower = search.lower()
         groups = [g for g in groups if search_lower in g.get("Группа", "").lower()]
@@ -355,7 +307,6 @@ async def get_stats(
         "total_surplus": sum(g.get("Излишки", 0) for g in groups),
         "total_shortage": sum(g.get("Недостачи", 0) for g in groups),
         "total_defect": sum(g.get("Брак", 0) for g in groups),
-        "manual_counts": sum(1 for g in groups if g.get("is_manual")),
     }
 
 
@@ -379,75 +330,29 @@ async def get_categories():
     """Список всех категорий"""
     if not inventory_data:
         return {"categories": []}
-    
+
     categories = set()
     for group in inventory_data.get("groups", []):
         category = group.get("Категория", "")
         if category:
             categories.add(category)
-    
+
     return {"categories": sorted(categories)}
 
 
-# ==================== Ручные отметки ====================
+@app.get("/api/frequencies")
+async def get_frequencies():
+    """Список всех частот подсчёта"""
+    if not inventory_data:
+        return {"frequencies": []}
 
+    frequencies = set()
+    for group in inventory_data.get("groups", []):
+        freq = group.get("Частота подсчета", "")
+        if freq:
+            frequencies.add(freq)
 
-class CountRequest(BaseModel):
-    store: str
-    found_count: int = 0
-    total_planned: int = 0
-    surplus: int = 0
-    shortage: int = 0
-    defect: int = 0
-
-class CountResponse(BaseModel):
-    status: str
-    message: str
-    data: Dict[str, Any]
-
-@app.post("/api/count/{group_id}", response_model=CountResponse)
-async def count_group(group_id: str, request: CountRequest):
-    """Отметить группу как посчитанную (ручной ввод)"""
-    result = upsert_manual_count(
-        group_id=group_id,
-        store=request.store,
-        found_count=request.found_count,
-        total_planned=request.total_planned,
-        surplus=request.surplus,
-        shortage=request.shortage,
-        defect=request.defect,
-    )
-
-    # Обновляем данные в памяти
-    _apply_manual_update_to_memory(group_id, request.store, result)
-
-    # Рассылаем минимальное обновление (только summary + file_name)
-    _send_update_to_clients()
-
-    return CountResponse(status="ok", message="Группа отмечена", data=result)
-
-
-class StoreParam(BaseModel):
-    store: str
-
-@app.delete("/api/count/{group_id}")
-async def uncount_group(group_id: str, request: StoreParam):
-    """Сбросить ручную отметку группы"""
-    deleted = delete_manual_count(group_id, request.store)
-
-    if deleted:
-        _remove_manual_from_memory(group_id, request.store)
-        # Рассылаем минимальное обновление (только summary + file_name)
-        _send_update_to_clients()
-
-    return {"status": "ok", "deleted": deleted}
-
-
-@app.get("/api/manual_counts")
-async def get_manual_counts():
-    """Все ручные отметки"""
-    counts = get_all_manual_counts()
-    return {"counts": counts, "total": len(counts)}
+    return {"frequencies": sorted(frequencies)}
 
 
 # ==================== WebSocket ====================
@@ -520,7 +425,6 @@ async def startup_event():
 
             try:
                 data = parse_inventory_file(latest_path)
-                data["groups"] = merge_with_csv_data(data.get("groups", []))
                 data["summary"] = _recalculate_summary(data["groups"])
                 data["file_name"] = latest_name
                 inventory_data = data

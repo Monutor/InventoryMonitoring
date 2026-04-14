@@ -1,21 +1,16 @@
 <template>
-  <div 
-    class="card cursor-pointer"
+  <div
+    class="card"
     :class="{
       'border-l-4 border-green-500': group.Доля === 100,
       'border-l-4 border-yellow-500': group.Доля > 0 && group.Доля < 100,
       'border-l-4 border-red-500': group.Доля === 0,
-      'ring-2 ring-primary-500': expanded,
     }"
-    @click="expanded = !expanded"
   >
     <!-- Заголовок -->
     <div class="flex items-start justify-between gap-3">
       <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2">
-          <h3 class="font-semibold text-gray-900 dark:text-gray-100 truncate">{{ group['Группа'] }}</h3>
-          <span v-if="group.is_manual" class="badge badge-green text-[10px]" title="Ручной ввод">📝</span>
-        </div>
+        <h3 class="font-semibold text-gray-900 dark:text-gray-100 truncate">{{ group['Группа'] }}</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{{ group['Подкатегория'] || group['Категория'] }}</p>
       </div>
 
@@ -58,8 +53,8 @@
       </div>
     </div>
 
-    <!-- Раскрытые детали -->
-    <div v-if="expanded" class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+    <!-- Детали -->
+    <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
       <div class="grid grid-cols-2 gap-3 text-sm">
         <div>
           <span class="text-gray-500 dark:text-gray-400">Группа ID:</span>
@@ -97,23 +92,12 @@
           </div>
         </div>
       </div>
-
-      <!-- Кнопка ручного ввода -->
-      <button 
-        @click.stop="$emit('count', group)"
-        class="mt-4 w-full btn btn-primary"
-      >
-        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-        </svg>
-        {{ group.is_manual ? '✏️ Изменить результат' : '✏️ Внести результат' }}
-      </button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps({
   group: {
@@ -121,10 +105,6 @@ const props = defineProps({
     required: true,
   },
 })
-
-defineEmits(['count'])
-
-const expanded = ref(false)
 
 const statusText = computed(() => {
   if (props.group.Доля === 100) return '✅ Готово'
@@ -144,13 +124,12 @@ const progressBarClass = computed(() => {
   return 'bg-red-400'
 })
 
-const hasDiscrepancies = computed(() => 
+const hasDiscrepancies = computed(() =>
   props.group.Излишки > 0 || props.group.Недостачи > 0 || props.group.Брак > 0
 )
 
 function formatDate(dateStr) {
   if (!dateStr) return '—'
-  // Формат даты из CSV: ДД.ММ.ГГГГ
   return dateStr
 }
 </script>

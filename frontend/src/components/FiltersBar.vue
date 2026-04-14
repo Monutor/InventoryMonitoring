@@ -4,18 +4,28 @@
       <!-- Выбор категории -->
       <div class="flex-1 min-w-[180px]">
         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Категория</label>
-        <DropdownSelect 
-          v-model="store.selectedCategory" 
+        <DropdownSelect
+          v-model="store.selectedCategory"
           :options="categoryOptions"
           placeholder="Все категории"
+        />
+      </div>
+
+      <!-- Частота подсчёта -->
+      <div class="flex-1 min-w-[160px]">
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Частота подсчёта</label>
+        <DropdownSelect
+          v-model="store.selectedFrequency"
+          :options="frequencyOptions"
+          placeholder="Все"
         />
       </div>
 
       <!-- Статус -->
       <div class="flex-1 min-w-[160px]">
         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Статус</label>
-        <DropdownSelect 
-          v-model="store.selectedStatus" 
+        <DropdownSelect
+          v-model="store.selectedStatus"
           :options="statusOptions"
           placeholder="Все"
         />
@@ -60,6 +70,10 @@
         {{ store.selectedCategory }}
         <button @click="store.selectedCategory = ''" class="ml-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">×</button>
       </span>
+      <span v-if="store.selectedFrequency" class="badge badge-gray">
+        🔄 {{ store.selectedFrequency }}
+        <button @click="store.selectedFrequency = ''" class="ml-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">×</button>
+      </span>
       <span v-if="store.selectedStatus" class="badge badge-gray">
         {{ statusLabel }}
         <button @click="store.selectedStatus = ''" class="ml-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">×</button>
@@ -79,19 +93,22 @@ import DropdownSelect from '@/components/DropdownSelect.vue'
 
 const store = useInventoryStore()
 
-const hasActiveFilters = computed(() => 
-  store.selectedCategory || store.selectedStatus || store.searchQuery
+const hasActiveFilters = computed(() =>
+  store.selectedCategory || store.selectedStatus || store.selectedFrequency || store.searchQuery
 )
 
 const categoryOptions = computed(() =>
   store.categories.map(c => ({ value: c, label: c }))
 )
 
+const frequencyOptions = computed(() =>
+  store.frequencies.map(f => ({ value: f, label: f }))
+)
+
 const statusOptions = computed(() => [
   { value: 'counted', label: '✅ Посчитано' },
   { value: 'partial', label: '⏳ Частично' },
   { value: 'not_counted', label: '❌ Не начато' },
-  { value: 'manual', label: '📝 Ручные' },
 ])
 
 const statusLabel = computed(() => {
@@ -99,7 +116,6 @@ const statusLabel = computed(() => {
     counted: '✅ Посчитано',
     partial: '⏳ Частично',
     not_counted: '❌ Не начато',
-    manual: '📝 Ручные',
   }
   return labels[store.selectedStatus] || ''
 })

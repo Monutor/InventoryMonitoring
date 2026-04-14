@@ -48,8 +48,10 @@ export const useInventoryStore = defineStore('inventory', () => {
   })
   const stores = ref([])
   const categories = ref([])
+  const frequencies = ref([])
   const loading = ref(false)
   const loadingMore = ref(false)
+  const searchLoading = ref(false)
   const connected = ref(false)
   const lastUpdate = ref(null)
   const notifications = ref([])
@@ -64,12 +66,28 @@ export const useInventoryStore = defineStore('inventory', () => {
   // Filters
   const selectedCategory = ref('')
   const selectedStatus = ref('')
+  const selectedFrequency = ref('')
   const searchQuery = ref('')
 
-  // Filters changed — reset pagination
-  watch([selectedCategory, selectedStatus, searchQuery], () => {
+  // Debounce timer для поиска
+  let searchDebounceTimer = null
+
+  // Фильтры категории/статуса/частоты — без задержки (редкие действия)
+  watch([selectedCategory, selectedStatus, selectedFrequency], () => {
     resetPagination()
     fetchInitial()
+  })
+
+  // Поиск — с debounce 1000мс (чтобы не дёргать API на каждый символ)
+  watch(searchQuery, () => {
+    clearTimeout(searchDebounceTimer)
+    searchLoading.value = true
+    searchDebounceTimer = setTimeout(() => {
+      resetPagination()
+      fetchInitial().finally(() => {
+        searchLoading.value = false
+      })
+    }, 1000)
   })
 
   function resetPagination() {
@@ -118,14 +136,16 @@ export const useInventoryStore = defineStore('inventory', () => {
       params.set('limit', String(getPageSize()))
       params.set('offset', '0')
       if (selectedCategory.value) params.set('category', selectedCategory.value)
+      if (selectedFrequency.value) params.set('frequency', selectedFrequency.value)
       if (selectedStatus.value) params.set('status', selectedStatus.value)
       if (searchQuery.value) params.set('search', searchQuery.value)
 
-      const [groupsRes, statsRes, storesRes, categoriesRes] = await Promise.all([
+      const [groupsRes, statsRes, storesRes, categoriesRes, frequenciesRes] = await Promise.all([
         fetch(`${API_BASE}/api/groups?${params}`),
         fetch(`${API_BASE}/api/stats`),
         fetch(`${API_BASE}/api/stores`),
         fetch(`${API_BASE}/api/categories`),
+        fetch(`${API_BASE}/api/frequencies`),
       ])
 
       if (groupsRes.ok) {
@@ -145,6 +165,10 @@ export const useInventoryStore = defineStore('inventory', () => {
       if (categoriesRes.ok) {
         const data = await categoriesRes.json()
         categories.value = data.categories || []
+      }
+      if (frequenciesRes.ok) {
+        const data = await frequenciesRes.json()
+        frequencies.value = data.frequencies || []
       }
 
       lastUpdate.value = new Date().toISOString()
@@ -168,6 +192,7 @@ export const useInventoryStore = defineStore('inventory', () => {
       params.set('limit', String(getPageSize()))
       params.set('offset', String(offset))
       if (selectedCategory.value) params.set('category', selectedCategory.value)
+      if (selectedFrequency.value) params.set('frequency', selectedFrequency.value)
       if (selectedStatus.value) params.set('status', selectedStatus.value)
       if (searchQuery.value) params.set('search', searchQuery.value)
 
@@ -326,50 +351,11 @@ export const useInventoryStore = defineStore('inventory', () => {
     }
   }
 
-  async function submitManualCount(groupId, storeName, foundCount, totalPlanned, surplus, shortage, defect) {
-    const response = await fetch(`${API_BASE}/api/count/${encodeURIComponent(groupId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        store: storeName,
-        found_count: foundCount,
-        total_planned: totalPlanned,
-        surplus,
-        shortage,
-        defect,
-      }),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Ошибка сохранения')
-    }
-
-    const result = await response.json()
-    addNotification('Группа отмечена', `${result.data.found_count} шт. найдено`, 'success')
-    await fetchInitial()
-    return result
-  }
-
-  async function removeManualCount(groupId, storeName, groupName) {
-    const response = await fetch(`${API_BASE}/api/count/${encodeURIComponent(groupId)}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ store: storeName }),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.detail || 'Ошибка сброса')
-    }
-
-    addNotification('Отметка сброшена', `Результат для "${groupName}" сброшен`, 'info')
-    await fetchInitial()
-  }
-
   function clearFilters() {
+    clearTimeout(searchDebounceTimer)
     selectedCategory.value = ''
     selectedStatus.value = ''
+    selectedFrequency.value = ''
     searchQuery.value = ''
   }
 
@@ -380,6 +366,7 @@ export const useInventoryStore = defineStore('inventory', () => {
     categories,
     loading,
     loadingMore,
+    searchLoading,
     loadingInitial,
     connected,
     lastUpdate,
@@ -389,11 +376,13 @@ export const useInventoryStore = defineStore('inventory', () => {
     toggleTheme,
     selectedCategory,
     selectedStatus,
+    selectedFrequency,
     searchQuery,
     filteredGroups,
     hasDiscrepancies,
     hasMore,
     totalGroups,
+    frequencies,
     fetchInitial,
     fetchAll: fetchInitial, // alias for backwards compatibility
     loadMore,
@@ -401,8 +390,6 @@ export const useInventoryStore = defineStore('inventory', () => {
     addNotification,
     removeNotification,
     uploadFile,
-    submitManualCount,
-    removeManualCount,
     clearFilters,
   }
 })
